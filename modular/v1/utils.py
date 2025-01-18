@@ -26,12 +26,10 @@ class Trainer:
         # running 평균 loss 계산.
         accu_loss = 0.0
         running_avg_loss = 0.0
-        # running 평균 metric(정확도) 계산. 최종 runnig_avg_metric이 전체 학습 데이터의 정확도
-        accu_metric = 0.0
-        running_avg_metric = 0.0
-        # epoch별 정확도 계산을 위한 전체 건수 및 누적 정확건수
+        # 정확도, 정확도 계산을 위한 전체 건수 및 누적 정확건수
         num_total = 0.0
         accu_num_correct = 0.0
+        accuracy = 0.0
         # tqdm으로 실시간 training loop 진행 상황 시각화
         with tqdm(total=len(self.train_loader), desc=f"Epoch {epoch+1} [Training..]", leave=True) as progress_bar:
             for batch_idx, (inputs, targets) in enumerate(self.train_loader):
@@ -52,16 +50,13 @@ class Trainer:
                 accu_loss += loss.item()
                 running_avg_loss = accu_loss /(batch_idx + 1)
 
-                # 배치당 accuracy metric 계산
+                # accuracy metric 계산
+                # outputs 출력 예측 class값과 targets값 일치 건수 구하고
                 num_correct = (outputs.argmax(-1) == targets).sum().item()
-                metric_value = num_correct / inputs.shape[0] # num_correct / batch 크기
-                # running 평균 accuracy metric 계산. 배치별 정확도를 모두 더한 뒤에 배치 횟수로 나눔. 최종으로는 전체 데이터의 정확도와 동일.
-                accu_metric += metric_value
-                accuracy = accu_metric / (batch_idx + 1)
-
-                # epoch레벨로 정확도 계산을 위해 전체 건수와 전체 num_correct 건수 계산  
+                # 배치별 누적 전체 건수와 누적 전체 num_correct 건수로 accuracy 계산  
                 num_total += inputs.shape[0]
                 accu_num_correct += num_correct
+                accuracy = accu_num_correct / num_total
 
                 #tqdm progress_bar에 진행 상황 및 running 평균 loss와 정확도 표시
                 progress_bar.update(1)
@@ -69,11 +64,10 @@ class Trainer:
                     progress_bar.set_postfix({"Loss": running_avg_loss,
                                               "Accuracy": accuracy})
 
-        if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+        if (self.scheduler is not None) and (not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)):
             self.scheduler.step()
             self.current_lr = self.scheduler.get_last_lr()[0]
         
-        accuracy = accu_num_correct / num_total
         return running_avg_loss, accuracy
 
     def validate_epoch(self, epoch):
@@ -85,12 +79,10 @@ class Trainer:
         # running 평균 loss 계산.
         accu_loss = 0
         running_avg_loss = 0
-        # running 평균 metric(정확도) 계산. 최종 runnig_avg_metric이 전체 학습 데이터의 정확도
-        accu_metric = 0.0
-        running_avg_metric = 0.0
-        # epoch별 정확도 계산을 위한 전체 건수 및 누적 정확건수
+        # 정확도, 정확도 계산을 위한 전체 건수 및 누적 정확건수
         num_total = 0.0
         accu_num_correct = 0.0
+        accuracy = 0.0
         current_lr = self.optimizer.param_groups[0]['lr']
         with tqdm(total=len(self.val_loader), desc=f"Epoch {epoch+1} [Validating]", leave=True) as progress_bar:
             with torch.no_grad():
@@ -105,28 +97,24 @@ class Trainer:
                     accu_loss += loss.item()
                     running_avg_loss = accu_loss /(batch_idx + 1)
 
-                    # 배치당 accuracy metric 계산
+                    # accuracy metric 계산
+                    # outputs 출력 예측 class값과 targets값 일치 건수 구하고
                     num_correct = (outputs.argmax(-1) == targets).sum().item()
-                    metric_value = num_correct / inputs.shape[0] # num_correct / batch 크기
-                    # running 평균 accuracy metric 계산. 배치별 정확도를 모두 더한 뒤에 배치 횟수로 나눔. 최종으로는 전체 데이터의 정확도와 동일.
-                    accu_metric += metric_value
-                    accuracy = accu_metric / (batch_idx + 1)
-                    
-                    # epoch레벨로 정확도 계산을 위해 전체 건수와 전체 num_correct 건수 계산  
+                    # 배치별 누적 전체 건수와 누적 전체 num_correct 건수로 accuracy 계산  
                     num_total += inputs.shape[0]
                     accu_num_correct += num_correct
+                    accuracy = accu_num_correct / num_total
                     
                     #tqdm progress_bar에 진행 상황 및 running 평균 loss와 정확도 표시
                     progress_bar.update(1)
                     if batch_idx % 20 == 0 or (batch_idx + 1) == progress_bar.total:  # 20 batch 횟수마다 또는 맨 마지막 batch에서 update
                         progress_bar.set_postfix({"Loss": running_avg_loss,
-                                                  "Accuracy":accuracy})
+                                                  "Accuracy": accuracy})
         # scheduler에 검증 데이터 기반에서 epoch레벨로 계산된 loss를 입력해줌.
         if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             self.scheduler.step(running_avg_loss)
             self.current_lr = self.scheduler.get_last_lr()[0]
 
-        accuracy = accu_num_correct / num_total
         return running_avg_loss, accuracy
 
     def fit(self, epochs):
@@ -142,14 +130,17 @@ class Trainer:
             history['train_loss'].append(train_loss); history['train_acc'].append(train_acc)
             history['val_loss'].append(val_loss); history['val_acc'].append(val_acc)
             history['lr'].append(self.current_lr)
-            
-            if(self.callbacks):
+
+            # 만약 callbacks가 생성 인자로 들어온 다면 아래 수행. 만약 early stop 되어야 하면 is_epoch_loop_break로 for loop break
+            if self.callbacks:
                 is_epoch_loop_break = self._execute_callbacks(self.callbacks, self.model, epoch, val_loss, val_acc)
                 if is_epoch_loop_break:
                     break
                                 
         return history
 
+    # 생성 인자로 들어온 callbacks list을 하나씩 꺼내서 ModelCheckpoint, EarlyStopping을 수행. 
+    # EarlyStopping 호출 시 early stop 여부를 판단하는 is_early_stopped 반환
     def _execute_callbacks(self, callbacks, model, epoch, val_loss, val_acc):
         is_early_stopped = False
         
@@ -179,9 +170,8 @@ class Predictor:
     def evaluate(self, loader):
         # 현재 입력으로 들어온 데이터의 batch 통계(mean, variance)를 사용하지 않고, 학습 시 계산된 running 통계값을 사용
         self.model.eval()
-        accu_metric = 0.0
         eval_metric = 0.0
-        # epoch별 정확도 계산을 위한 전체 건수 및 누적 정확건수
+        # 정확도 계산을 위한 전체 건수 및 누적 정확건수
         num_total = 0.0
         accu_num_correct = 0.0
 
@@ -191,21 +181,17 @@ class Predictor:
                     inputs = inputs.to(self.device)
                     targets = targets.to(self.device)
                     pred = self.model(inputs)
-                    
+
+                    # 정확도 계산을 위해 누적 전체 건수와 누적 전체 num_correct 건수 계산  
                     num_correct = (pred.argmax(-1) == targets).sum().item()
-                    metric_value = num_correct / inputs.shape[0] # num_correct / batch 크기
-                    accu_metric += metric_value
-                    eval_metric = accu_metric / (batch_idx + 1)
- 
-                    # epoch레벨로 정확도 계산을 위해 전체 건수와 전체 num_correct 건수 계산  
                     num_total += inputs.shape[0]
                     accu_num_correct += num_correct
+                    eval_metric = accu_num_correct / num_total
 
                     progress_bar.update(1)
                     if batch_idx % 20 == 0 or (batch_idx + 1) == progress_bar.total:
                         progress_bar.set_postfix({"Accuracy": eval_metric})
         
-        eval_metric = accu_num_correct / num_total
         return eval_metric
 
     def predict_proba(self, inputs):
