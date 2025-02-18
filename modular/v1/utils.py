@@ -168,7 +168,6 @@ class Predictor:
         self.device = device
 
     def evaluate(self, loader):
-        # 현재 입력으로 들어온 데이터의 batch 통계(mean, variance)를 사용하지 않고, 학습 시 계산된 running 통계값을 사용
         self.model.eval()
         eval_metric = 0.0
         # 정확도 계산을 위한 전체 건수 및 누적 정확건수
